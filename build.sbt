@@ -1,5 +1,3 @@
-ThisBuild / scalaVersion := ""
-
 lazy val root = (project in file("."))
   .settings(
     name := "commoncrawl-stream"
