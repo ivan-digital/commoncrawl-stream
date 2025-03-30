@@ -14,16 +14,14 @@ import scala.concurrent.{Await, ExecutionContext}
 object CCProcessorApp {
   def main(args: Array[String]): Unit = {
     Thread.currentThread().setContextClassLoader(this.getClass.getClassLoader)
-    val detector = LanguageDetector.getDefaultLanguageDetector().loadModels()
+    val detector = LanguageDetector.getDefaultLanguageDetector.loadModels()
     println(s"Detected: ${detector.detect("Hello world!").getLanguage}")
     implicit val ec: ExecutionContext = ExecutionContext.global
 
-    // 1) Download listing
     val crawlId      = "CC-MAIN-2024-51"
     val wetPathsFile = "output/wet.paths"
     WetMetadataFetcher.fetchWetPaths(crawlId, "output")
 
-    // 2) Kick off parallel downloads
     val processedFile  = "output/processed_chunks.txt"
     val downloadFuture = FileDownloadManager.downloadAllChunksAsync(
       warcPathsFile       = wetPathsFile,
@@ -32,12 +30,10 @@ object CCProcessorApp {
       parallelism         = 5
     )
 
-    // 3) Create SparkSession
     val spark = SparkSessionManager.spark
     import spark.implicits._
 
     try {
-      // 4) Streaming read of local WET files
       val warcRawDf = FileReader.readFiles(
           spark,
           AppConfig.localStagingDir,
@@ -46,11 +42,9 @@ object CCProcessorApp {
         .withColumn("input_filename", input_file_name())
         .withColumn("processed_at", current_timestamp())
 
-      // 5) Language detection
       val processedDf = warcRawDf
         .withColumn("language", LanguageUtils.detectLanguageUdf($"value"))
 
-      // ========== STREAM 1: Language Aggregator -> Console ==========
       val langAggDf = processedDf.groupBy("language").count()
 
       val aggregatorConsoleQuery = langAggDf.writeStream
@@ -61,7 +55,16 @@ object CCProcessorApp {
         .option("checkpointLocation", AppConfig.localCheckpointPath + "/lang_agg_console")
         .start()
 
-      // ========== STREAM 2: Cleanup Files (foreachBatch) ==========
+      val filteredLanguagesDf = processedDf.filter($"language".isin("ru", "it", "de"))
+
+      val storeFilteredLanguagesQuery = filteredLanguagesDf.writeStream
+        .format("parquet")
+        .option("path", "output/languages_parquet")
+        .option("checkpointLocation", AppConfig.localCheckpointPath + "/languages_parquet_checkpoint")
+        .partitionBy("language")
+        .outputMode("append")
+        .start()
+
       val cleanupQuery = processedDf.writeStream
         .outputMode("append")
         .foreachBatch { (batchDf: Dataset[Row], batchId: Long) =>
@@ -79,16 +82,15 @@ object CCProcessorApp {
             }
           }
         }
-        .trigger(Trigger.ProcessingTime("1 hour")) // every hour
+        .trigger(Trigger.ProcessingTime("1 hour"))
         .option("checkpointLocation", AppConfig.localCheckpointPath + "/cleanup_checkpoint")
         .start()
 
-      // 6) Wait for downloads
       Await.result(downloadFuture, Duration.Inf)
       println("All WET files have been downloaded.")
 
-      // 7) Wait for streaming queries
       aggregatorConsoleQuery.awaitTermination()
+      storeFilteredLanguagesQuery.awaitTermination()
       cleanupQuery.awaitTermination()
 
     } finally {
