@@ -7,7 +7,7 @@ object ProcessedChunksTracker {
   @volatile private var loaded = false
   private val processed = mutable.Set[String]()
 
-  private val lock = new Object // for synchronization
+  private val lock = new Object
 
   def loadProcessedChunks(filePath: String): Unit = lock.synchronized {
     if (!loaded) {
@@ -35,7 +35,6 @@ object ProcessedChunksTracker {
   def markChunkProcessed(chunkName: String, filePath: String): Unit = lock.synchronized {
     if (!processed.contains(chunkName)) {
       processed += chunkName
-      // Append to file
       val fw = new FileWriter(filePath, true)
       try {
         fw.write(chunkName + "\n")

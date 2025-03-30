@@ -6,12 +6,16 @@ import digital.ivan.commoncrawl.pipeline.LanguageUtils
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.Trigger
 import org.apache.spark.sql.{Dataset, Row}
+import org.apache.tika.language.detect.LanguageDetector
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext}
 
 object CCProcessorApp {
   def main(args: Array[String]): Unit = {
+    Thread.currentThread().setContextClassLoader(this.getClass.getClassLoader)
+    val detector = LanguageDetector.getDefaultLanguageDetector().loadModels()
+    println(s"Detected: ${detector.detect("Hello world!").getLanguage}")
     implicit val ec: ExecutionContext = ExecutionContext.global
 
     // 1) Download listing

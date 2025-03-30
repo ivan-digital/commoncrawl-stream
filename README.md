@@ -64,7 +64,7 @@ sbt clean assembly
 Or from IntelliJ / another IDE with Scala & SBT support.
 5.	Run the main app:
 ```bash
-sbt "runMain digital.ivan.commoncrawl.CCProcessorApp"
+java --add-opens java.base/sun.nio.ch=ALL-UNNAMED -jar "target\scala-2.12\CommonCrawlStream-assembly-0.1.jar"
 ```
 This will:
 -	Download wet.paths.gz from CommonCrawl.
@@ -73,6 +73,35 @@ This will:
 -	Simultaneously, start a Spark Structured Streaming job reading from output/staging/.
 -	Print aggregator outputs to console.
 -	Write result Parquet files to output/commoncrawl_results.
+
+Intermediate result:
+```text
++--------+-----+
+|language|count|
++--------+-----+
+|en      |23118|
+|vi      |1620 |
+|ro      |1147 |
+|sl      |345  |
+|ur      |85   |
+|lv      |327  |
+|pl      |1719 |
+|sk      |449  |
+|pt      |1242 |
+|NULL    |2203 |
+|oc      |775  |
+|gl      |717  |
+|tl      |955  |
+|sw      |290  |
+|ms      |1045 |
+|ko      |456  |
+|uk      |528  |
+|be      |684  |
+|cs      |472  |
+|sr      |490  |
++--------+-----+
+
+```
 
 ## Workflow Overview
 1.	Fetch WET paths:
