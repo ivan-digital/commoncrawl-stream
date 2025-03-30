@@ -47,12 +47,12 @@ object CCProcessorApp {
 
       val langAggDf = processedDf.groupBy("language").count()
 
-      val aggregatorConsoleQuery = langAggDf.writeStream
+      val aggregatorParquetQuery = langAggDf.writeStream
         .outputMode("complete")
-        .format("console")
-        .option("truncate", "false")
-        .trigger(Trigger.ProcessingTime("1 hour")) // every hour
-        .option("checkpointLocation", AppConfig.localCheckpointPath + "/lang_agg_console")
+        .format("parquet")
+        .option("path", "output/lang_agg_parquet")
+        .option("checkpointLocation", AppConfig.localCheckpointPath + "/lang_agg_parquet_checkpoint")
+        .trigger(Trigger.ProcessingTime("1 hour"))
         .start()
 
       val filteredLanguagesDf = processedDf.filter($"language".isin("ru", "it", "de"))
@@ -89,8 +89,8 @@ object CCProcessorApp {
       Await.result(downloadFuture, Duration.Inf)
       println("All WET files have been downloaded.")
 
-      aggregatorConsoleQuery.awaitTermination()
       storeFilteredLanguagesQuery.awaitTermination()
+      aggregatorParquetQuery.awaitTermination()
       cleanupQuery.awaitTermination()
 
     } finally {
