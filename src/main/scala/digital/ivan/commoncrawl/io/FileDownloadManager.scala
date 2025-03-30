@@ -4,7 +4,7 @@ import java.io.{File, FileInputStream}
 import java.net.URL
 import java.util.zip.GZIPInputStream
 
-import digital.ivan.commoncrawl.util.ProcessedChunksTracker
+import digital.ivan.commoncrawl.utils.ProcessedChunksTracker
 import org.apache.commons.io.FileUtils
 
 import scala.concurrent.{ExecutionContext, Future}

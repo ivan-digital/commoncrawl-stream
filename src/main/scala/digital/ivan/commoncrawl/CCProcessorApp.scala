@@ -2,7 +2,8 @@ package digital.ivan.commoncrawl
 
 import digital.ivan.commoncrawl.config.{AppConfig, SparkSessionManager}
 import digital.ivan.commoncrawl.io.{FileDownloadManager, FileReader, WetMetadataFetcher}
-import digital.ivan.commoncrawl.pipeline.LanguageUtils
+import digital.ivan.commoncrawl.utils.FormatUtils.htmlToMarkdownUdf
+import digital.ivan.commoncrawl.utils.LanguageUtils
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.Trigger
 import org.apache.spark.sql.{Dataset, Row}
@@ -43,16 +44,22 @@ object CCProcessorApp {
         .withColumn("processed_at", current_timestamp())
 
       val processedDf = warcRawDf
-        .withColumn("language", LanguageUtils.detectLanguageUdf($"value"))
+        .withColumn("markdown_text", htmlToMarkdownUdf($"value"))
+        .withColumn("language", LanguageUtils.detectLanguageUdf($"markdown_text"))
 
       val langAggDf = processedDf.groupBy("language").count()
 
-      val aggregatorParquetQuery = langAggDf.writeStream
+      val aggQuery = langAggDf.writeStream
         .outputMode("complete")
-        .format("parquet")
-        .option("path", "output/lang_agg_parquet")
-        .option("checkpointLocation", AppConfig.localCheckpointPath + "/lang_agg_parquet_checkpoint")
+        .foreachBatch { (batchDf: Dataset[Row], batchId: Long) =>
+          batchDf
+            .coalesce(1)
+            .write
+            .mode("overwrite")
+            .json("output/lang_agg_json")
+        }
         .trigger(Trigger.ProcessingTime("1 hour"))
+        .option("checkpointLocation", "path/to/checkpoint/lang_agg/")
         .start()
 
       val filteredLanguagesDf = processedDf.filter($"language".isin("ru", "it", "de"))
@@ -90,7 +97,7 @@ object CCProcessorApp {
       println("All WET files have been downloaded.")
 
       storeFilteredLanguagesQuery.awaitTermination()
-      aggregatorParquetQuery.awaitTermination()
+      aggQuery.awaitTermination()
       cleanupQuery.awaitTermination()
 
     } finally {

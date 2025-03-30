@@ -1,4 +1,4 @@
-package digital.ivan.commoncrawl.util
+package digital.ivan.commoncrawl.utils
 
 import java.io.{BufferedReader, File, FileReader, FileWriter}
 import scala.collection.mutable

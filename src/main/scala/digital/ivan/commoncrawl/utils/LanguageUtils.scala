@@ -1,8 +1,8 @@
-package digital.ivan.commoncrawl.pipeline
+package digital.ivan.commoncrawl.utils
 
 import org.apache.spark.sql.expressions.UserDefinedFunction
-import org.apache.tika.language.detect.{LanguageDetector, LanguageResult}
 import org.apache.spark.sql.functions.udf
+import org.apache.tika.language.detect.{LanguageDetector, LanguageResult}
 
 object LanguageUtils {
 

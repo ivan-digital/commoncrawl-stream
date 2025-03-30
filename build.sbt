@@ -18,16 +18,17 @@ lazy val root = (project in file("."))
       "org.apache.spark" %% "spark-core"             % "3.5.5",
       "org.apache.spark" %% "spark-sql"              % "3.5.5",
       "org.apache.spark" %% "spark-mllib"            % "3.5.5",
-      "org.apache.spark" %% "spark-sql-kafka-0-10"     % "3.5.5",
+      "org.apache.spark" %% "spark-sql-kafka-0-10"   % "3.5.5",
 
       // Apache Tika for language detection (compile scope so it is packaged)
       "org.apache.tika"  % "tika-core"                % "3.1.0",
       "org.apache.tika"  % "tika-langdetect"          % "3.1.0",
-      "org.apache.tika"  % "tika-langdetect-optimaize" % "3.1.0",
+      "org.apache.tika"  % "tika-langdetect-optimaize"% "3.1.0",
 
-      // Spark NLP
-      "com.johnsnowlabs.nlp" %% "spark-nlp"          % "5.5.3"
-    ),
+      "com.johnsnowlabs.nlp" %%"spark-nlp"        % "5.5.3",
+      "com.vladsch.flexmark" % "flexmark-all"     % "0.64.8"
+
+),
 
     // Merge strategy: handle duplicate files and service files.
     assemblyMergeStrategy := {
