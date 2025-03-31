@@ -1,79 +1,131 @@
 package digital.ivan.commoncrawl.io
 
+import org.apache.commons.io.FileUtils
+import digital.ivan.commoncrawl.utils.ProcessedChunksTracker
+
 import java.io.{File, FileInputStream}
 import java.net.URL
+import java.util.concurrent.Semaphore
 import java.util.zip.GZIPInputStream
-
-import digital.ivan.commoncrawl.utils.ProcessedChunksTracker
-import org.apache.commons.io.FileUtils
-
 import scala.concurrent.{ExecutionContext, Future}
 import scala.io.Source
 
 object FileDownloadManager {
 
+  val connectTimeoutMs = 2 * 60 * 1000  // 2 minutes
+  val readTimeoutMs    = 10 * 60 * 1000 // 10 minutes for large Common Crawl WETs
+
   /**
-   * Download all WET/WARC chunks in parallel (batched),
-   * marking them as processed once downloaded.
+   * Continuously downloads files from `wetPathsFile` into `stagingDir`.
+   * Limits concurrency to `maxParallel`.
+   * Also ensures the staging directory never holds more than `maxWindowSize` files at once.
    *
-   * @param warcPathsFile       A file listing all chunk paths (can be a .gz file)
-   * @param stagingDir          Local directory to store the chunk
-   * @param processedChunksFile File tracking downloaded chunks
-   * @param parallelism         How many downloads to run in parallel
-   * @return A Future that completes when all downloads are finished
+   * Once it finishes all lines, it completes the returned Future.
    */
-  def downloadAllChunksAsync(warcPathsFile: String,
-                             stagingDir: String,
-                             processedChunksFile: String,
-                             parallelism: Int = 5
-                            )(implicit ec: ExecutionContext): Future[Unit] = {
+  def downloadInBackground(
+                            wetPathsFile: String,
+                            stagingDir: String,
+                            processedChunksFile: String,
+                            maxParallel: Int,
+                            maxWindowSize: Int
+                          )(implicit ec: ExecutionContext): Future[Unit] = {
 
     ProcessedChunksTracker.loadProcessedChunks(processedChunksFile)
 
-    val source = if (warcPathsFile.toLowerCase.endsWith(".gz")) {
-      val fis = new FileInputStream(warcPathsFile)
-      val gzis = new GZIPInputStream(fis)
-      Source.fromInputStream(gzis)
-    } else {
-      Source.fromFile(warcPathsFile)
+    val source = {
+      if (wetPathsFile.toLowerCase.endsWith(".gz")) {
+        val fis = new FileInputStream(wetPathsFile)
+        val gzis = new GZIPInputStream(fis)
+        Source.fromInputStream(gzis)
+      } else {
+        Source.fromFile(wetPathsFile)
+      }
     }
 
-    val lines = source.getLines().toList
+    val allLines = source.getLines().toList
     source.close()
 
-    val unprocessedLines = lines.filter { line =>
-      val chunkFileName = line.split("/").last
-      !ProcessedChunksTracker.isChunkProcessed(chunkFileName)
+    val unprocessed = allLines.filter { line =>
+      val chunkFile = line.split("/").last
+      !ProcessedChunksTracker.isChunkProcessed(chunkFile)
     }
 
-    // 4) Group into batches of size = parallelism
-    val groupedBatches = unprocessedLines.grouped(parallelism).toList
+    println(s"Will download ${unprocessed.size} new files, ignoring already processed.")
 
-    // 5) Process each batch sequentially, with each batch downloading in parallel
-    val batchFutures = groupedBatches.map { batch =>
-      val chunkFutures = batch.map { line =>
-        Future {
+    val downloadSem = new Semaphore(maxParallel)
+
+    Future {
+      unprocessed.foreach { line =>
+        blockIfTooManyInStaging(stagingDir, maxWindowSize)
+
+        downloadSem.acquire()
+        try {
           val chunkFileName = line.split("/").last
-          val fullUrl       = s"https://data.commoncrawl.org/$line"
-          val dest          = new File(stagingDir, chunkFileName)
+          val url           = s"https://data.commoncrawl.org/$line"
 
-          if (!dest.exists()) {
-            println(s"Downloading $fullUrl to ${dest.getAbsolutePath}")
-            FileUtils.copyURLToFile(new URL(fullUrl), dest, 30000, 30000)
+          val tmpDest   = new File(stagingDir, chunkFileName + ".tmp")
+          val finalDest = new File(stagingDir, chunkFileName)
+
+          if (!finalDest.exists()) {
+            println(s"[Downloader] Downloading $url -> ${tmpDest.getName}")
+            FileUtils.copyURLToFile(new URL(url), tmpDest, connectTimeoutMs, readTimeoutMs)
+            if (isGzipValid(tmpDest)) {
+              println(s"[Downloader] Renaming ${tmpDest.getName} -> ${finalDest.getName}")
+              val renamedOk = tmpDest.renameTo(finalDest)
+              if (!renamedOk) {
+                println(s"[Downloader] WARNING: Could not rename ${tmpDest.getName} to ${finalDest.getName}")
+              }
+            } else {
+              println(s"[Downloader] Detected invalid/corrupt GZIP for ${tmpDest.getName}. Deleting or re-trying.")
+              tmpDest.delete()
+            }
           } else {
-            println(s"${dest.getName} already exists, skipping.")
+            println(s"[Downloader] Already exists: ${finalDest.getName}")
           }
 
           ProcessedChunksTracker.markChunkProcessed(chunkFileName, processedChunksFile)
+
+        } finally {
+          downloadSem.release()
         }
       }
-      Future.sequence(chunkFutures).map(_ => ())
-    }
 
-    val allBatchesFuture = batchFutures.foldLeft(Future.successful(())) { (acc, batchFut) =>
-      acc.flatMap(_ => batchFut)
+      println("[Downloader] Finished all lines. No more files to download.")
     }
-
-    allBatchesFuture.map(_ => println("All chunks are downloaded and marked processed."))
   }
+
+  /**
+   * Blocks if we already have >= maxWindowSize files in staging, waiting until
+   * Spark presumably processes (and deletes) some.
+   */
+  private def blockIfTooManyInStaging(stagingDir: String, maxWindowSize: Int): Unit = {
+    def currentCount: Int = new File(stagingDir).listFiles().length
+
+    while (currentCount >= maxWindowSize) {
+      println(s"[Downloader] Staging is full ($currentCount >= $maxWindowSize). Waiting...")
+      Thread.sleep(20000)
+    }
+  }
+
+  /**
+   * Returns true if we can fully read the file as valid GZIP.
+   * If the file is truncated or corrupt, we catch the exception and return false.
+   */
+  def isGzipValid(file: File): Boolean = {
+    var in: GZIPInputStream = null
+    try {
+      in = new GZIPInputStream(new FileInputStream(file))
+      val buf = new Array[Byte](8192)
+      while (in.read(buf) != -1) {
+      }
+      true
+    } catch {
+      case e: Exception =>
+        println(s"[Downloader] isGzipValid failed for ${file.getName}: ${e.getMessage}")
+        false
+    } finally {
+      if (in != null) in.close()
+    }
+  }
+
 }

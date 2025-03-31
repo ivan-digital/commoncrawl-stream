@@ -15,5 +15,4 @@ object LanguageUtils {
       result.getLanguage
     }
   }
-
 }

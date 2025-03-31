@@ -39,8 +39,6 @@ lazy val root = (project in file("."))
       "org.apache.tika"  % "tika-core"                 % "3.1.0",
       "org.apache.tika"  % "tika-langdetect"           % "3.1.0",
       "org.apache.tika"  % "tika-langdetect-optimaize" % "3.1.0",
-      "com.johnsnowlabs.nlp" %% "spark-nlp"           % "5.5.3",
-      "com.vladsch.flexmark"  % "flexmark-all"         % "0.64.8"
     ),
 
     assemblyMergeStrategy := {

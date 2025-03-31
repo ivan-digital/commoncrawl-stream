@@ -1,103 +1,127 @@
 package digital.ivan.commoncrawl
 
 import digital.ivan.commoncrawl.config.{AppConfig, SparkSessionManager}
-import digital.ivan.commoncrawl.io.{FileDownloadManager, FileReader, WetMetadataFetcher}
-import digital.ivan.commoncrawl.utils.FormatUtils.htmlToMarkdownUdf
-import digital.ivan.commoncrawl.utils.LanguageUtils
+import digital.ivan.commoncrawl.io.{FileDownloadManager, WetMetadataFetcher}
+import digital.ivan.commoncrawl.utils.{LanguageUtils, WarcProcessor}
+import org.apache.spark.sql._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.Trigger
-import org.apache.spark.sql.{Dataset, Row}
-
+import org.apache.spark.sql.types._
+import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success}
+import java.io.File
 import java.net.URI
-import java.nio.file.Paths
-import scala.concurrent.duration._
-import scala.concurrent.{Await, ExecutionContext}
 
 object CCProcessorApp {
 
   def main(args: Array[String]): Unit = {
-    implicit val ec: ExecutionContext = ExecutionContext.global
+    implicit val ec: ExecutionContext = scala.concurrent.ExecutionContext.global
 
     val crawlId      = "CC-MAIN-2024-51"
     val wetPathsFile = "output/wet.paths"
     WetMetadataFetcher.fetchWetPaths(crawlId, "output")
 
-    val processedFile  = "output/processed_chunks.txt"
-    val downloadFuture = FileDownloadManager.downloadAllChunksAsync(
-      warcPathsFile       = wetPathsFile,
-      stagingDir          = AppConfig.localStagingDir,
-      processedChunksFile = processedFile,
-      parallelism         = 5
-    )
+    val processedFile = "output/processed_chunks.txt"
+    val downloadFuture: Future[Unit] =
+      FileDownloadManager.downloadInBackground(
+        wetPathsFile,
+        AppConfig.localStagingDir,
+        processedChunksFile = processedFile,
+        maxParallel = 1,
+        maxWindowSize = 50
+      )
+
+    val stagingDir = new File(AppConfig.localStagingDir)
+    if (!stagingDir.exists()) {
+      println(s"Staging directory ${stagingDir.getAbsolutePath} does not exist. Creating it...")
+      stagingDir.mkdirs()
+    }
 
     val spark = SparkSessionManager.spark
     import spark.implicits._
 
+    val binaryFileSchema = new StructType()
+      .add("path", StringType)
+      .add("modificationTime", TimestampType)
+      .add("length", LongType)
+      .add("content", BinaryType)
+
     try {
-      val warcRawDf = FileReader.readFiles(
-          spark,
-          AppConfig.localStagingDir,
-          AppConfig.maxFilesPerTrigger
-        )
-        .withColumn("input_filename", input_file_name())
+
+      val warcBinaryDf = spark.readStream
+        .schema(binaryFileSchema)
+        .format("binaryFile")
+        .option("pathGlobFilter", "*.wet.gz")
+        .load(AppConfig.localStagingDir)
+
+      val parsedWarcDf = warcBinaryDf.flatMap { row =>
+          val content = row.getAs[Array[Byte]]("content")
+          val filePath = row.getAs[String]("path")
+
+          WarcProcessor.parseWarcRecords(content).map { case (url, rawText) =>
+            (url, rawText, filePath)
+          }
+        }(Encoders.tuple(Encoders.STRING, Encoders.STRING, Encoders.STRING))
+        .toDF("url", "raw_text", "file_path")
+
+      val transformedDf = parsedWarcDf
         .withColumn("processed_at", current_timestamp())
+        .withColumn("cleaned_text", $"raw_text")
+        .withColumn("language", LanguageUtils.detectLanguageUdf($"cleaned_text"))
 
-      val unifiedQuery = warcRawDf.writeStream
+      val query = transformedDf.writeStream
         .outputMode("append")
-        .trigger(Trigger.ProcessingTime("1 minute"))
+        .trigger(Trigger.ProcessingTime("30 seconds"))
         .foreachBatch { (batchDf: Dataset[Row], batchId: Long) =>
-          val processedBatchDf = batchDf
-            .withColumn("markdown_text", htmlToMarkdownUdf($"value"))
-            .withColumn("language", LanguageUtils.detectLanguageUdf($"markdown_text"))
 
-          val langAggBatchDf = processedBatchDf.groupBy("language").count()
-
+          val langAggBatchDf = batchDf.groupBy("language").count()
           langAggBatchDf
             .coalesce(1)
             .write
-            .mode("overwrite")
+            .mode(SaveMode.Append)
             .json("output/lang_agg_json")
 
-          val filteredBatchDf = processedBatchDf.filter($"language".isin("ru", "it", "de"))
+          val filteredBatchDf = batchDf.filter($"language".isin("ru", "it", "de"))
           filteredBatchDf
             .write
             .format("parquet")
             .option("path", "output/languages_parquet")
             .option("checkpointLocation", AppConfig.localCheckpointPath + "/languages_parquet_checkpoint")
             .partitionBy("language")
-            .mode("append")
+            .mode(SaveMode.Append)
             .save()
 
-          val filesInBatch = batchDf
-            .select("input_filename")
+          println(s"[Spark] Done batch $batchId with ${batchDf.count()} rows")
+
+          val filePaths = batchDf
+            .select("file_path")
             .distinct()
             .as[String]
             .collect()
 
-          filesInBatch.foreach { originalPath =>
-            val uri = new URI(originalPath)
-            val file = Paths.get(uri).toFile
-            val fileName = file.getName
-            if (file.exists()) {
-              println(s"Deleting file: $fileName")
-              val deleted = file.delete()
-              if (!deleted) {
-                println(s"Unable to delete file: $fileName")
+          filePaths.foreach { pathStr =>
+            try {
+              val uri = new URI(pathStr)
+              val localFile = new File(uri)
+              if (localFile.exists()) {
+                println(s"[Spark] Deleting already processed file: $localFile")
+                localFile.delete()
               }
-            } else {
-              println(s"File does not exist, skipping: $fileName")
+            } catch {
+              case e: Exception =>
+                println(s"[Spark] Failed deleting file $pathStr: ${e.getMessage}")
             }
           }
-
-          println(s"Batch $batchId processed. # of files in batch: ${filesInBatch.length}")
         }
         .option("checkpointLocation", AppConfig.localCheckpointPath + "/unified_checkpoint")
         .start()
 
-      Await.result(downloadFuture, Duration.Inf)
-      println("All WET files have been downloaded.")
+      downloadFuture.onComplete {
+        case Success(_) => println("[Downloader] All files have been queued for download.")
+        case Failure(e) => println(s"[Downloader] Download failed: $e")
+      }
 
-      unifiedQuery.awaitTermination()
+      query.awaitTermination()
 
     } finally {
       spark.stop()
