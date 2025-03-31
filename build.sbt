@@ -1,7 +1,5 @@
 import sbt._
 import sbt.Keys._
-
-// Import AssemblyPlugin auto-import members (this brings in MergeStrategy, PathList, and ShadeRule)
 import sbtassembly.AssemblyPlugin
 import sbtassembly.AssemblyPlugin.autoImport._
 
@@ -14,54 +12,51 @@ lazy val root = (project in file("."))
     version := "0.1",
 
     libraryDependencies ++= Seq(
-      // Spark libraries (provided by the cluster)
-      "org.apache.spark" %% "spark-core"             % "3.5.5",
-      "org.apache.spark" %% "spark-sql"              % "3.5.5",
-      "org.apache.spark" %% "spark-mllib"            % "3.5.5",
-      "org.apache.spark" %% "spark-sql-kafka-0-10"   % "3.5.5",
+      // Spark libraries in compile scope, excluding Log4j 1.x
+      "org.apache.spark" %% "spark-core" % "3.5.5"
+        exclude("org.slf4j", "slf4j-log4j12")
+        exclude("log4j", "log4j")
+        exclude("org.apache.logging.log4j", "log4j-1.2-api"),
+      "org.apache.spark" %% "spark-sql" % "3.5.5"
+        exclude("org.slf4j", "slf4j-log4j12")
+        exclude("log4j", "log4j")
+        exclude("org.apache.logging.log4j", "log4j-1.2-api"),
+      "org.apache.spark" %% "spark-mllib" % "3.5.5"
+        exclude("org.slf4j", "slf4j-log4j12")
+        exclude("log4j", "log4j")
+        exclude("org.apache.logging.log4j", "log4j-1.2-api"),
+      "org.apache.spark" %% "spark-sql-kafka-0-10" % "3.5.5"
+        exclude("org.slf4j", "slf4j-log4j12")
+        exclude("log4j", "log4j")
+        exclude("org.apache.logging.log4j", "log4j-1.2-api"),
 
-      // Apache Tika for language detection (compile scope so it is packaged)
-      "org.apache.tika"  % "tika-core"                % "3.1.0",
-      "org.apache.tika"  % "tika-langdetect"          % "3.1.0",
-      "org.apache.tika"  % "tika-langdetect-optimaize"% "3.1.0",
+      // Bring in Log4j 2 explicitly
+      "org.apache.logging.log4j" % "log4j-api" % "2.24.3",
+      "org.apache.logging.log4j" % "log4j-core" % "2.24.3",
+      "org.apache.logging.log4j" % "log4j-slf4j2-impl" % "2.24.3",
 
-      "com.johnsnowlabs.nlp" %%"spark-nlp"        % "5.5.3",
-      "com.vladsch.flexmark" % "flexmark-all"     % "0.64.8"
+      // Tika, Spark NLP, etc.
+      "org.apache.tika"  % "tika-core"                 % "3.1.0",
+      "org.apache.tika"  % "tika-langdetect"           % "3.1.0",
+      "org.apache.tika"  % "tika-langdetect-optimaize" % "3.1.0",
+      "com.johnsnowlabs.nlp" %% "spark-nlp"           % "5.5.3",
+      "com.vladsch.flexmark"  % "flexmark-all"         % "0.64.8"
+    ),
 
-),
-
-    // Merge strategy: handle duplicate files and service files.
     assemblyMergeStrategy := {
-      case PathList("META-INF", "MANIFEST.MF") =>
-        MergeStrategy.discard
-
-      // Discard signature files
+      case "META-INF/MANIFEST.MF" => MergeStrategy.discard
       case PathList("META-INF", xs @ _*) if xs.exists { x =>
-        val lower = x.toLowerCase; lower.endsWith(".rsa") || lower.endsWith(".sf") || lower.endsWith(".dsa")
-      } =>
-        MergeStrategy.discard
-
-      // Discard Java 9+ module descriptors
+        val lower = x.toLowerCase
+        lower.endsWith(".rsa") || lower.endsWith(".sf") || lower.endsWith(".dsa")
+      } => MergeStrategy.discard
       case x if x.endsWith("module-info.class") =>
         MergeStrategy.discard
-
-      // Concatenate service files so that Tika can load its detectors
       case PathList("META-INF", "services", _ @ _*) =>
         MergeStrategy.concat
-
-      // Concatenate reference.conf files if present
       case "reference.conf" =>
         MergeStrategy.concat
-
-      // For duplicate annotation classes, pick the last one
-      case x if x.contains("org/intellij/lang/annotations") ||
-        x.contains("org/jetbrains/annotations") =>
-        MergeStrategy.last
-
-      // For NativeLibrary collisions, pick the first
-      case x if x.endsWith("org/tensorflow/NativeLibrary.class") =>
-        MergeStrategy.first
-
+      case "log4j.properties" =>
+        MergeStrategy.discard
       case _ =>
         MergeStrategy.first
     }
