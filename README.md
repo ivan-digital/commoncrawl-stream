@@ -27,7 +27,6 @@ This project demonstrates how to:
 │               └── ivan
 │                   └── commoncrawl
 │                       ├── CCProcessorApp.scala
-│                       │   └── WarcAggregator.scala
 │                       ├── config
 │                       │   ├── AppConfig.scala
 │                       │   └── SparkSessionManager.scala

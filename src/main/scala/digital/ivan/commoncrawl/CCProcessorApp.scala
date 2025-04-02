@@ -27,8 +27,8 @@ object CCProcessorApp {
         wetPathsFile,
         AppConfig.localStagingDir,
         processedChunksFile = processedFile,
-        maxParallel = 1,
-        maxWindowSize = 50
+        maxParallel = 10,
+        maxWindowSize = 100
       )
 
     val stagingDir = new File(AppConfig.localStagingDir)
