@@ -66,8 +66,7 @@ object CCProcessorApp {
 
       val transformedDf = parsedWarcDf
         .withColumn("processed_at", current_timestamp())
-        .withColumn("cleaned_text", $"raw_text")
-        .withColumn("language", LanguageUtils.detectLanguageUdf($"cleaned_text"))
+        .withColumn("language", LanguageUtils.detectLanguageUdf($"raw_text"))
 
       val query = transformedDf.writeStream
         .outputMode("append")
@@ -86,6 +85,7 @@ object CCProcessorApp {
             .write
             .format("parquet")
             .option("path", "output/languages_parquet")
+            .option("compression", "gzip")
             .option("checkpointLocation", AppConfig.localCheckpointPath + "/languages_parquet_checkpoint")
             .partitionBy("language")
             .mode(SaveMode.Append)
