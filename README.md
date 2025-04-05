@@ -1,12 +1,13 @@
 ## CommonCrawl Processing with Spark NLP & Tika
 
 This project demonstrates how to:
-1.	**Fetch metadata** (paths to WET files) from a CommonCrawl dataset.
-2.	**Download** the WET chunks in parallel to a local directory.
-3.	**Use Spark Structured Streaming** to read the downloaded files (in streaming mode).
-4.	**Detect languages** in text (via Apache Tika).
-6.	**Aggregate** results (language frequencies and token frequencies).
-7.	**Write** outputs to Parquet.
+1. **Fetch metadata** (paths to WET files) from a CommonCrawl dataset.
+2. **Download** the WET chunks in parallel to a local directory.
+3. **Use Spark Structured Streaming** to read the downloaded files (in streaming mode).
+4. **Detect languages** in text (via Apache Tika).
+5. **Aggregate** results (language frequencies and token frequencies).
+6. **Write** outputs to Parquet.
+7. **Optionally** detect and remove near-duplicates (via MinHash LSH in Spark ML).
 
 ### Table of Contents
 -	Project Structure(#project-structure)
@@ -26,13 +27,16 @@ This project demonstrates how to:
 │           └── digital
 │               └── ivan
 │                   └── commoncrawl
-│                       ├── CCProcessorApp.scala
+│                       ├── CCPApp.scala
 │                       ├── config
 │                       │   ├── AppConfig.scala
 │                       │   └── SparkSessionManager.scala
 │                       ├── io
 │                       │   ├── FileDownloadManager.scala
 │                       │   └── WetMetadataFetcher.scala
+│                       ├── processor
+│                       │   ├── CommonCrawlRawProcessor.scala
+│                       │   └── LanguageDedupProcessor.scala
 │                       └── utils
 │                           ├── ProcessedChunksTracker.scala
 │                           ├── LanguageUtils.scala
@@ -60,7 +64,10 @@ sbt clean assembly
 Or from IntelliJ / another IDE with Scala & SBT support.
 5.	Run the main app:
 ```bash
-java --add-opens java.base/sun.nio.ch=ALL-UNNAMED -jar "target\scala-2.12\CommonCrawlStream-assembly-0.1.jar"
+# (A) RAW Mode
+java --add-opens java.base/sun.nio.ch=ALL-UNNAMED -jar "target\scala-2.12\CommonCrawlStream-assembly-0.1.jar" raw
+# (B) DEDUP Mode (requires that raw mode has already produced Parquet data)
++java --add-opens java.base/sun.nio.ch=ALL-UNNAMED -jar "target\scala-2.12\CommonCrawlStream-assembly-0.1.jar" dedup
 ```
 This will:
 -	Download wet.paths.gz from CommonCrawl.
@@ -126,6 +133,9 @@ Intermediate result:
 9.	Configuration
 -	Various paths (wetPathsFile, stagingDir, output paths, checkpoints) can be customized in AppConfig or runtime args.
 -	Parallelism, memory, and batch intervals (Triggers) are also configurable based on the Spark environment and performance needs.
+10. Near-Duplicate Detection (DEDUP Mode)
+-   After you have run the raw pipeline, you can optionally remove near-duplicates. The LanguageDedupProcessor uses a MinHash LSH approach over tokenized text, identifying documents that fall within a certain Jaccard distance threshold. 
+-   It then groups them via GraphX connected components, and writes out a deduplicated dataset to output/languages_parquet_deduped/.
 
 ---
 **Happy crawling and analyzing CommonCrawl!** If you have questions or suggestions, feel free to modify the code and adapt it to your workflow.
